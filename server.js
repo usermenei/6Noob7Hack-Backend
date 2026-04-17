@@ -1,12 +1,12 @@
+// server.js — correct order
+const dotenv = require("dotenv");
+dotenv.config({ path: "./config/config.env" }); // ← MUST be first
+
 const { setServers } = require("node:dns/promises");
 setServers(["1.1.1.1", "8.8.8.8"]);
 
-const dotenv = require("dotenv");
 const connectDB = require("./config/db");
 const app = require("./app");
-
-// Load env vars
-dotenv.config({ path: "./config/config.env" });
 
 const PORT = process.env.PORT || 5000;
 let server;
