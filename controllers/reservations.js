@@ -369,3 +369,38 @@ exports.confirmReservation = async (req, res) => {
         return handleError(err, res);
     }
 };
+
+// =====================================================
+// @desc    PERMANENT DELETE reservation (ADMIN or OWNER)
+// =====================================================
+exports.permanentlyDeleteReservation = async (req, res) => {
+  try {
+    const reservation = await Reservation.findById(req.params.id);
+
+    if (!reservation) {
+      return res.status(404).json({
+        success: false,
+        message: "Reservation not found",
+      });
+    }
+
+    if (
+      reservation.user.toString() !== req.user.id &&
+      req.user.role !== "admin"
+    ) {
+      return res.status(403).json({
+        success: false,
+        message: "Not authorized",
+      });
+    }
+
+    await reservation.deleteOne();
+
+    res.status(200).json({
+      success: true,
+      message: "Reservation permanently deleted",
+    });
+  } catch (err) {
+    return handleError(err, res);
+  }
+};
