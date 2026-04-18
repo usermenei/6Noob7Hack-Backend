@@ -1,41 +1,52 @@
 const express = require('express');
 
 const {
-    getReservations,
-    getReservation,
-    addReservation,
-    updateReservation,
-    deleteReservation,
-    confirmReservation
+  getReservations,
+  getReservation,
+  addReservation,
+  updateReservation,
+  deleteReservation,
+  confirmReservation,
+  permanentlyDeleteReservation // 👈 NEW
 } = require('../controllers/reservations');
 
 const router = express.Router({ mergeParams: true });
 
 const { protect, authorize } = require('../middleware/auth');
 
+// =====================================================
+// 🔥 PERMANENT DELETE (IMPORTANT: put BEFORE /:id)
+// =====================================================
+router.delete(
+  '/:id/permanent',
+  protect,
+  authorize('admin', 'user'),
+  permanentlyDeleteReservation
+);
 
-// GET all reservations
-// POST create reservation
+// =====================================================
+// GET all / POST create
+// =====================================================
 router.route('/')
-    .get(protect, getReservations)
-    .post(protect, authorize('admin', 'user'), addReservation);
+  .get(protect, getReservations)
+  .post(protect, authorize('admin', 'user'), addReservation);
 
-
-// GET single reservation
-// UPDATE reservation
-// DELETE reservation
+// =====================================================
+// GET / PUT / DELETE (cancel)
+// =====================================================
 router.route('/:id')
-    .get(protect, getReservation)
-    .put(protect, authorize('admin', 'user'), updateReservation)
-    .delete(protect, authorize('admin', 'user'), deleteReservation);
+  .get(protect, getReservation)
+  .put(protect, authorize('admin', 'user'), updateReservation)
+  .delete(protect, authorize('admin', 'user'), deleteReservation);
 
-
-// 🔥 Admin confirm reservation
+// =====================================================
+// ADMIN CONFIRM
+// =====================================================
 router.put(
-    '/:id/confirm',
-    protect,
-    authorize('admin'),
-    confirmReservation
+  '/:id/confirm',
+  protect,
+  authorize('admin'),
+  confirmReservation
 );
 
 module.exports = router;

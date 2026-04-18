@@ -371,7 +371,7 @@ exports.confirmReservation = async (req, res) => {
 };
 
 // =====================================================
-// @desc    PERMANENT DELETE reservation (ADMIN or OWNER)
+// @desc    PERMANENT DELETE reservation
 // =====================================================
 exports.permanentlyDeleteReservation = async (req, res) => {
   try {
