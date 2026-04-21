@@ -50,7 +50,18 @@ const PaymentSchema = new mongoose.Schema(
         cashConfirmedAt: {
             type: Date,
             default: null
-        }
+        },
+        auditLog: [
+            {
+                changedBy : { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+                action    : { type: String },  // 'method_change' | 'cancel'
+                oldMethod : { type: String },
+                newMethod : { type: String },
+                oldStatus : { type: String },
+                newStatus : { type: String },
+                timestamp : { type: Date, default: Date.now }
+            }
+        ]
     },
     {
         timestamps: true

@@ -2106,3 +2106,228 @@
  *               success: false
  *               message: "Reservation not found"
  */
+/**
+ * @swagger
+ * /payments/admin/qr-code:
+ *   post:
+ *     summary: Admin uploads a static QR code image (US2-7)
+ *     tags: [Payments]
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         multipart/form-data:
+ *           schema:
+ *             type: object
+ *             required: [image, spaceId]
+ *             properties:
+ *               image:
+ *                 type: string
+ *                 format: binary
+ *                 description: QR code image file (JPG/PNG/WEBP, max 5MB)
+ *               spaceId:
+ *                 type: string
+ *                 description: MongoDB ObjectId of the coworking space
+ *     responses:
+ *       '201':
+ *         description: QR Code uploaded and activated successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                 message:
+ *                   type: string
+ *                   example: QR Code updated successfully
+ *                 uploadedAt:
+ *                   type: string
+ *                   format: date-time
+ *       '400':
+ *         description: No file, invalid format, or missing spaceId
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                   example: false
+ *                 message:
+ *                   type: string
+ *                   example: Format Not Supported. Use JPG, PNG, or WEBP.
+ *       '403':
+ *         description: Admin access required
+ *   get:
+ *     summary: Get active QR code image for user payment page (US2-7)
+ *     tags: [Payments]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: query
+ *         name: spaceId
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: MongoDB ObjectId of the coworking space
+ *     responses:
+ *       '200':
+ *         description: Returns the active QR code image as binary
+ *         content:
+ *           image/png:
+ *             schema:
+ *               type: string
+ *               format: binary
+ *           image/jpeg:
+ *             schema:
+ *               type: string
+ *               format: binary
+ *           image/webp:
+ *             schema:
+ *               type: string
+ *               format: binary
+ *       '400':
+ *         description: spaceId is required
+ *       '404':
+ *         description: No active QR code found
+ *
+ * /payments/admin/qr-code/info:
+ *   get:
+ *     summary: Get active QR code metadata for admin dashboard (US2-7)
+ *     tags: [Payments]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: query
+ *         name: spaceId
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: MongoDB ObjectId of the coworking space
+ *     responses:
+ *       '200':
+ *         description: QR code metadata including preview dataUrl
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                 data:
+ *                   type: object
+ *                   properties:
+ *                     imageUrl:
+ *                       type: string
+ *                       description: Base64 data URL for image preview
+ *                     uploadedBy:
+ *                       type: string
+ *                       description: Admin name who uploaded
+ *                     uploadedAt:
+ *                       type: string
+ *                       format: date-time
+ *       '400':
+ *         description: spaceId is required
+ *       '403':
+ *         description: Admin access required
+ *       '404':
+ *         description: No active QR code found
+ *
+ * /payments/admin/{id}/method:
+ *   put:
+ *     summary: Admin updates a user payment method (US2-8)
+ *     tags: [Payments]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: Payment ID
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [method]
+ *             properties:
+ *               method:
+ *                 type: string
+ *                 enum: [qr, cash]
+ *     responses:
+ *       '200':
+ *         description: Payment method updated successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                 data:
+ *                   type: object
+ *                   description: Updated payment object with auditLog
+ *       '400':
+ *         description: Cannot change method on a completed payment
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                   example: false
+ *                 message:
+ *                   type: string
+ *                   example: Cannot change method on a completed payment
+ *       '403':
+ *         description: Admin access required
+ *       '404':
+ *         description: Payment not found
+ *
+ * /payments/admin/{id}/cancel:
+ *   put:
+ *     summary: Admin cancels a payment (US2-9)
+ *     tags: [Payments]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: Payment ID
+ *     responses:
+ *       '200':
+ *         description: Payment cancelled successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                 data:
+ *                   type: object
+ *                   properties:
+ *                     payment:
+ *                       type: object
+ *                       description: >
+ *                         status becomes "cancelled" (if was pending/failed)
+ *                         or "refund_required" (if was completed)
+ *                     reservationStatus:
+ *                       type: string
+ *                       example: cancelled
+ *       '400':
+ *         description: Cannot cancel payment with current status
+ *       '403':
+ *         description: Admin access required
+ *       '404':
+ *         description: Payment not found
+ */

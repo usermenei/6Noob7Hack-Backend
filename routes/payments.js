@@ -17,7 +17,9 @@ const {
     uploadAdminQrCode,
     uploadQrMiddleware,
     getAdminQrCode,
-    getAdminQrCodeInfo
+    getAdminQrCodeInfo,
+    adminUpdatePaymentMethod,
+    adminCancelPayment
 } = require('../controllers/payments');
 
 const { protect, authorize } = require('../middleware/auth');
@@ -51,12 +53,18 @@ router.get('/pending-cash',       protect, getPendingCashPayments);
 router.get('/user/:id',           protect, getPaymentsByUser);
 
 // -------------------------------------------------------
-// Generic  (keep :id routes LAST to avoid swallowing static paths)
+// US2-7 Admin QR code management
 // -------------------------------------------------------
-router.get('/:id',                protect, getPayment);
-
 router.post('/admin/qr-code',      protect, authorize('admin'), uploadQrMiddleware, uploadAdminQrCode);
 router.get('/admin/qr-code/info',  protect, authorize('admin'), getAdminQrCodeInfo);
 router.get('/admin/qr-code',       protect, getAdminQrCode);
+
+router.put('/admin/:id/method',  protect, authorize('admin'), adminUpdatePaymentMethod);
+router.put('/admin/:id/cancel',  protect, authorize('admin'), adminCancelPayment);
+
+// -------------------------------------------------------
+// Generic  (keep :id routes LAST to avoid swallowing static paths)
+// -------------------------------------------------------
+router.get('/:id',                protect, getPayment);
 
 module.exports = router;

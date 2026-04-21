@@ -6,8 +6,9 @@ const QrCode      = require('../models/QrCode');
 const Room        = require('../models/Room');
 const QRCode = require('qrcode');
 const { randomUUID } = require('crypto');
+const AdminQrCode = require('../models/AdminQrCode');
+const multer      = require('multer');
 
-// multer memory storage (ไม่เขียนลง disk)
 const upload = multer({
     storage: multer.memoryStorage(),
     limits: { fileSize: 5 * 1024 * 1024 }, // 5MB
@@ -850,6 +851,104 @@ exports.getAdminQrCodeInfo = async (req, res) => {
                 imageUrl  : dataUrl,
                 uploadedBy: qrDoc.uploadedBy?.name,
                 uploadedAt: qrDoc.createdAt
+            }
+        });
+
+    } catch (err) {
+        return handleError(err, res);
+    }
+};
+
+exports.adminUpdatePaymentMethod = async (req, res) => {
+    try {
+        const { method } = req.body;
+
+        if (!method) {
+            return res.status(400).json({ success: false, message: 'method is required' });
+        }
+
+        const payment = await Payment.findById(req.params.id);
+        if (!payment) {
+            return res.status(404).json({ success: false, message: 'Payment not found' });
+        }
+
+        // block if already completed
+        if (payment.status === 'completed') {
+            return res.status(400).json({
+                success: false,
+                message: 'Cannot change method on a completed payment'
+            });
+        }
+
+        const oldMethod = payment.method;
+        payment.method = method;
+
+        payment.auditLog.push({
+            changedBy: req.user.id,
+            action   : 'method_change',
+            oldMethod,
+            newMethod: method,
+            oldStatus: payment.status,
+            newStatus: payment.status,
+            timestamp: new Date()
+        });
+
+        await payment.save();
+
+        return res.status(200).json({ success: true, data: payment });
+
+    } catch (err) {
+        return handleError(err, res);
+    }
+};
+
+exports.adminCancelPayment = async (req, res) => {
+    try {
+        const payment = await Payment.findById(req.params.id);
+        if (!payment) {
+            return res.status(404).json({ success: false, message: 'Payment not found' });
+        }
+
+        const oldStatus = payment.status;
+        let newPaymentStatus;
+
+        if (payment.status === 'pending' || payment.status === 'failed') {
+            newPaymentStatus = 'cancelled';
+
+        } else if (payment.status === 'completed') {
+            newPaymentStatus = 'refund_required';
+
+        } else {
+            return res.status(400).json({
+                success: false,
+                message: `Cannot cancel payment with status: ${payment.status}`
+            });
+        }
+
+        payment.status = newPaymentStatus;
+
+        payment.auditLog.push({
+            changedBy: req.user.id,
+            action   : 'cancel',
+            oldStatus,
+            newStatus: newPaymentStatus,
+            timestamp: new Date()
+        });
+
+        await payment.save();
+
+        // update reservation → cancelled + release time slot
+        const reservation = await Reservation.findById(payment.reservation);
+        if (reservation) {
+            reservation.status = 'cancelled';
+            await reservation.save();
+        }
+
+        return res.status(200).json({
+            success: true,
+            data: {
+                payment,
+                reservationStatus: 'Cancelled'
             }
         });
 
