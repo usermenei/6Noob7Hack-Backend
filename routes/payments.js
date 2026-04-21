@@ -13,10 +13,14 @@ const {
     getPendingCashPayments,
     getPayment,
     getPaymentsByUser,
-    updatePaymentMethod
+    updatePaymentMethod,
+    uploadAdminQrCode,
+    uploadQrMiddleware,
+    getAdminQrCode,
+    getAdminQrCodeInfo
 } = require('../controllers/payments');
 
-const { protect } = require('../middleware/auth');
+const { protect, authorize } = require('../middleware/auth');
 
 // -------------------------------------------------------
 // US2-1  Core payment
@@ -50,5 +54,9 @@ router.get('/user/:id',           protect, getPaymentsByUser);
 // Generic  (keep :id routes LAST to avoid swallowing static paths)
 // -------------------------------------------------------
 router.get('/:id',                protect, getPayment);
+
+router.post('/admin/qr-code',      protect, authorize('admin'), uploadQrMiddleware, uploadAdminQrCode);
+router.get('/admin/qr-code/info',  protect, authorize('admin'), getAdminQrCodeInfo);
+router.get('/admin/qr-code',       protect, getAdminQrCode);
 
 module.exports = router;

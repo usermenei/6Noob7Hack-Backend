@@ -6,7 +6,23 @@ const QrCode      = require('../models/QrCode');
 const Room        = require('../models/Room');
 const { v4: uuidv4 } = require('uuid');
 const QRCode = require('qrcode');
+const AdminQrCode = require('../models/AdminQrCode');
+const multer      = require('multer');
 
+// multer memory storage (ไม่เขียนลง disk)
+const upload = multer({
+    storage: multer.memoryStorage(),
+    limits: { fileSize: 5 * 1024 * 1024 }, // 5MB
+    fileFilter: (req, file, cb) => {
+        const allowed = ['image/jpeg', 'image/png', 'image/webp'];
+        if (allowed.includes(file.mimetype)) {
+            cb(null, true);
+        } else {
+            cb(new Error('Format Not Supported'), false);
+        }
+    }
+});
+exports.uploadQrMiddleware = upload.single('image');
 
 // =====================================================
 // Helper: Centralised error handler
@@ -745,6 +761,122 @@ exports.updatePaymentMethod = async (req, res) => {
         await payment.save();
 
         return res.status(200).json({ success: true, data: payment });
+    } catch (err) {
+        return handleError(err, res);
+    }
+};
+
+// =====================================================
+// @desc    Admin upload QR code image
+// @route   POST /api/v1/payments/admin/qr-code
+// @access  Private (admin only)
+// =====================================================
+exports.uploadAdminQrCode = async (req, res) => {
+    try {
+        if (!req.file) {
+            return res.status(400).json({ success: false, message: 'No file uploaded' });
+        }
+
+        const { spaceId } = req.body;
+        if (!spaceId) {
+            return res.status(400).json({ success: false, message: 'spaceId is required' });
+        }
+
+        // deactivate old QR for this space
+        await AdminQrCode.updateMany(
+            { coworkingSpace: spaceId },
+            { isActive: false }
+        );
+
+        // convert buffer to Base64
+        const imageData = req.file.buffer.toString('base64');
+
+        const qrDoc = await AdminQrCode.create({
+            coworkingSpace: spaceId,
+            imageData,
+            mimeType  : req.file.mimetype,
+            isActive  : true,
+            uploadedBy: req.user.id
+        });
+
+        return res.status(201).json({
+            success    : true,
+            message    : 'QR Code updated successfully',
+            uploadedAt : qrDoc.createdAt
+        });
+
+    } catch (err) {
+        if (err.message === 'Format Not Supported') {
+            return res.status(400).json({ success: false, message: 'Format Not Supported. Use JPG, PNG, or WEBP.' });
+        }
+        return handleError(err, res);
+    }
+};
+
+// =====================================================
+// @desc    Get active admin QR code image (for user payment page)
+// @route   GET /api/v1/payments/admin/qr-code?spaceId=:id
+// @access  Private
+// =====================================================
+exports.getAdminQrCode = async (req, res) => {
+    try {
+        const { spaceId } = req.query;
+        if (!spaceId) {
+            return res.status(400).json({ success: false, message: 'spaceId is required' });
+        }
+
+        const qrDoc = await AdminQrCode.findOne({
+            coworkingSpace: spaceId,
+            isActive: true
+        }).populate('uploadedBy', 'name');
+
+        if (!qrDoc) {
+            return res.status(404).json({ success: false, message: 'No active QR code found' });
+        }
+
+        // ส่งกลับเป็น image buffer โดยตรง
+        const imageBuffer = Buffer.from(qrDoc.imageData, 'base64');
+        res.set('Content-Type', qrDoc.mimeType);
+        return res.send(imageBuffer);
+
+    } catch (err) {
+        return handleError(err, res);
+    }
+};
+
+// =====================================================
+// @desc    Get active admin QR code metadata (for admin dashboard)
+// @route   GET /api/v1/payments/admin/qr-code/info?spaceId=:id
+// @access  Private (admin only)
+// =====================================================
+exports.getAdminQrCodeInfo = async (req, res) => {
+    try {
+        const { spaceId } = req.query;
+        if (!spaceId) {
+            return res.status(400).json({ success: false, message: 'spaceId is required' });
+        }
+
+        const qrDoc = await AdminQrCode.findOne({
+            coworkingSpace: spaceId,
+            isActive: true
+        }).populate('uploadedBy', 'name');
+
+        if (!qrDoc) {
+            return res.status(404).json({ success: false, message: 'No active QR code found' });
+        }
+
+        // ส่งกลับเป็น dataUrl สำหรับ admin preview
+        const dataUrl = `data:${qrDoc.mimeType};base64,${qrDoc.imageData}`;
+
+        return res.status(200).json({
+            success   : true,
+            data      : {
+                imageUrl  : dataUrl,
+                uploadedBy: qrDoc.uploadedBy?.name,
+                uploadedAt: qrDoc.createdAt
+            }
+        });
+
     } catch (err) {
         return handleError(err, res);
     }
