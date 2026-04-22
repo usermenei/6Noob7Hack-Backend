@@ -37,7 +37,7 @@ const swaggerOptions = {
 };
 
 const swaggerDocs = swaggerJsDoc(swaggerOptions);
-console.log(JSON.stringify(swaggerDocs, null, 2));
+// console.log(JSON.stringify(swaggerDocs, null, 2)); // Uncomment to debug generated Swagger docs
 
 // =====================================================
 // CORS CONFIG (FIXED)
