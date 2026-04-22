@@ -1760,7 +1760,7 @@
 
 /**
  * @swagger
- * /api/v1/payments/{id}/confirm-qr:
+ * /payments/{id}/confirm-qr:
  *   put:
  *     tags: [Payments]
  *     summary: Confirm QR payment — ระบบหา QR code จาก coworking space ของ reservation เองอัตโนมัติ
