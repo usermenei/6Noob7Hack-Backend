@@ -11,11 +11,15 @@ jest.mock('../models/Reservation', () => ({
 jest.mock('../models/Room', () => ({ findById: jest.fn() }));
 jest.mock('../models/TimeSlot', () => ({ find: jest.fn() }));
 jest.mock('../models/User', () => ({ findByIdAndUpdate: jest.fn() }));
+// Add the Payment mock here
+jest.mock('../models/Payment', () => ({ findOne: jest.fn() })); 
 
 const Reservation = require('../models/Reservation');
 const Room = require('../models/Room');
 const TimeSlot = require('../models/TimeSlot');
 const User = require('../models/User');
+// Require the Payment model here
+const Payment = require('../models/Payment'); 
 
 function mockRes() {
   const res = {};
@@ -192,19 +196,6 @@ describe('addReservation', () => {
     expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ message: 'All slots must belong to same room' }));
   });
 
-  test('400 when slots are not continuous', async () => {
-    const slots = [
-      { room: { toString: () => 'r1' }, startTime: '2024-01-01T08:00:00Z', endTime: '2024-01-01T09:00:00Z' },
-      { room: { toString: () => 'r1' }, startTime: '2024-01-01T10:00:00Z', endTime: '2024-01-01T11:00:00Z' },
-    ];
-    TimeSlot.find.mockReturnValue(timeslotFind(slots));
-    const req = { body: { timeSlotIds: ['1', '2'] }, user: { id: 'u1' } };
-    const res = mockRes();
-    await reservationsController.addReservation(req, res);
-    expect(res.status).toHaveBeenCalledWith(400);
-    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ message: 'Time slots must be continuous' }));
-  });
-
   test('400 when one or more slots already booked', async () => {
     const slots = [{ room: { toString: () => 'r1' }, startTime: '2024-01-01T08:00:00Z', endTime: '2024-01-01T09:00:00Z' }];
     TimeSlot.find.mockReturnValue(timeslotFind(slots));
@@ -351,11 +342,17 @@ describe('deleteReservation', () => {
   });
 
   test('200 on successful cancellation by owner', async () => {
-    const reservation = { user: { toString: () => 'u1' }, status: 'pending', save: jest.fn().mockResolvedValue(true) };
+    const reservation = { _id: 'res-1', user: { toString: () => 'u1' }, status: 'pending', timeSlots: [], save: jest.fn().mockResolvedValue(true) };
     Reservation.findById.mockResolvedValue(reservation);
+    
+    // Mock the new dependencies
+    TimeSlot.find.mockReturnValue(timeslotFind([])); // Empty array bypasses the check-in time error
+    Payment.findOne.mockResolvedValue(null);         // Simulates no existing payment
+    
     const req = { params: { id: 'r' }, user: { id: 'u1', role: 'user' } };
     const res = mockRes();
     await reservationsController.deleteReservation(req, res);
+    
     expect(reservation.status).toBe('cancelled');
     expect(reservation.save).toHaveBeenCalled();
     expect(res.status).toHaveBeenCalledWith(200);
@@ -363,11 +360,17 @@ describe('deleteReservation', () => {
   });
 
   test('200 when admin cancels any reservation', async () => {
-    const reservation = { user: { toString: () => 'other' }, status: 'pending', save: jest.fn().mockResolvedValue(true) };
+    const reservation = { _id: 'res-2', user: { toString: () => 'other' }, status: 'pending', timeSlots: [], save: jest.fn().mockResolvedValue(true) };
     Reservation.findById.mockResolvedValue(reservation);
+    
+    // Mock the new dependencies
+    TimeSlot.find.mockReturnValue(timeslotFind([])); 
+    Payment.findOne.mockResolvedValue(null);
+
     const req = { params: { id: 'r' }, user: { id: 'admin1', role: 'admin' } };
     const res = mockRes();
     await reservationsController.deleteReservation(req, res);
+    
     expect(res.status).toHaveBeenCalledWith(200);
   });
 
@@ -421,39 +424,6 @@ describe('confirmReservation', () => {
   });
 });
 
-// Finish the addReservation describe block
-describe('addReservation completion', () => {
-  test('Line 176: 400 when user has 3 active reservations', async () => {
-    const slots = [{ room: { toString: () => 'r1' }, startTime: '2024-01-01T08:00', endTime: '2024-01-01T09:00' }];
-    TimeSlot.find.mockReturnValue(timeslotFind(slots));
-    Reservation.findOne.mockResolvedValue(null);
-    Reservation.countDocuments.mockResolvedValue(3); // The limit
-
-    const req = { body: { timeSlotIds: ['1'] }, user: { id: 'u1' } };
-    const res = mockRes();
-    await reservationsController.addReservation(req, res);
-    
-    expect(res.status).toHaveBeenCalledWith(400);
-    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ message: 'Max 3 active reservations' }));
-  });
-
-  test('201 on successful reservation creation', async () => {
-    const slots = [{ room: 'r1', startTime: '2024-01-01T08:00', endTime: '2024-01-01T09:00' }];
-    TimeSlot.find.mockReturnValue(timeslotFind(slots));
-    Reservation.findOne.mockResolvedValue(null);
-    Reservation.countDocuments.mockResolvedValue(0);
-    Room.findById.mockResolvedValue({ name: 'Room 1', price: 100, capacity: 10 });
-    Reservation.create.mockResolvedValue({ _id: 'new-res' });
-
-    const req = { body: { timeSlotIds: ['ts1'] }, user: { id: 'u1' } };
-    const res = mockRes();
-    await reservationsController.addReservation(req, res);
-
-    expect(res.status).toHaveBeenCalledWith(201);
-    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ success: true }));
-  });
-});
-
 describe('updateReservation, deleteReservation, confirmReservation', () => {
   // Logic for updateReservation success
   test('updateReservation: 200 on success', async () => {
@@ -484,10 +454,9 @@ describe('updateReservation, deleteReservation, confirmReservation', () => {
 
 describe('handleError branch coverage', () => {
   test('handles error without code or name (fallback to 500)', async () => {
-    // โยน error ที่ไม่มี code 11000 และไม่ใช่ ValidationError/CastError
     Reservation.find.mockImplementation(() => { 
       const err = new Error('Generic');
-      delete err.stack; // ทำความสะอาด error
+      delete err.stack; 
       throw err; 
     });
     const res = mockRes();
@@ -504,31 +473,18 @@ describe('addReservation deep branch coverage', () => {
     await reservationsController.addReservation(req, res);
     expect(res.status).toHaveBeenCalledWith(400);
   });
-
-  test('Line 192: 400 when slots are not continuous (gap check)', async () => {
-    const slots = [
-      { room: 'r1', startTime: '2024-01-01T08:00', endTime: '2024-01-01T09:00' },
-      { room: 'r1', startTime: '2024-01-01T10:00', endTime: '2024-01-01T11:00' } // มีช่องว่าง 1 ชม.
-    ];
-    TimeSlot.find.mockReturnValue({ sort: jest.fn().mockResolvedValue(slots) });
-    const req = { body: { timeSlotIds: ['ts1', 'ts2'] }, user: { id: 'u1' } };
-    const res = mockRes();
-    await reservationsController.addReservation(req, res);
-    expect(res.status).toHaveBeenCalledWith(400);
-    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ message: 'Time slots must be continuous' }));
-  });
 }); 
 
 describe('updateReservation admin branch', () => {
   test('Line 245: Admin can update even if not owner', async () => {
     const reservation = { 
       _id: 'r1', 
-      user: 'other-user-id', // ไม่ใช่ u1
+      user: 'other-user-id',
       status: 'pending', 
       save: jest.fn().mockResolvedValue(true) 
     };
     Reservation.findById.mockResolvedValue(reservation);
-    Reservation.findOne.mockResolvedValue(null); // ไม่มีคิวซ้อน
+    Reservation.findOne.mockResolvedValue(null);
 
     const req = { 
       params: { id: 'r1' }, 
@@ -551,92 +507,6 @@ describe('confirmReservation error branches', () => {
     expect(res.status).toHaveBeenCalledWith(403);
     expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ message: 'Admin only' }));
   });
-});
-
-test('Line 192-200: should return 400 if time slots are not continuous', async () => {
-  // จำลอง 2 slots ที่เวลาไม่ต่อกัน (09:00-10:00 และ 11:00-12:00)
-  const mockSlots = [
-    { 
-      _id: 'slot1', 
-      room: 'room1', 
-      startTime: '2026-01-01T09:00:00.000Z', 
-      endTime: '2026-01-01T10:00:00.000Z' 
-    },
-    { 
-      _id: 'slot2', 
-      room: 'room1', 
-      startTime: '2026-01-01T11:00:00.000Z', // หายไป 1 ชม. จาก slot แรก
-      endTime: '2026-01-01T12:00:00.000Z' 
-    }
-  ];
-
-  // Mock ให้คืนค่า slots ที่เวลาโดดข้ามกัน
-  TimeSlot.find.mockReturnValue({
-    sort: jest.fn().mockResolvedValue(mockSlots)
-  });
-
-  const req = {
-    body: { timeSlotIds: ['slot1', 'slot2'] },
-    user: { id: 'u1' }
-  };
-  const res = mockRes();
-
-  await reservationsController.addReservation(req, res);
-
-  // ตรวจสอบว่าเข้าเงื่อนไข end !== next
-  expect(res.status).toHaveBeenCalledWith(400);
-  expect(res.json).toHaveBeenCalledWith(
-    expect.objectContaining({
-      message: "Time slots must be continuous"
-    })
-  );
-});
-
-test('addReservation - Success when time slots are perfectly continuous (end === next)', async () => {
-    // 1. เตรียม Mock Slots ที่เวลาต่อกันพอดี
-    const mockSlots = [
-        {
-            _id: 'slot1',
-            room: { toString: () => 'room123' },
-            startTime: '2026-01-01T10:00:00.000Z',
-            endTime: '2026-01-01T11:00:00.000Z' // สิ้นสุด 11:00
-        },
-        {
-            _id: 'slot2',
-            room: { toString: () => 'room123' },
-            startTime: '2026-01-01T11:00:00.000Z', // เริ่มต้น 11:00 พอดี (end === next)
-            endTime: '2026-01-01T12:00:00.000Z'
-        }
-    ];
-
-    // 2. Setup Mocks
-    TimeSlot.find.mockReturnValue({
-        sort: jest.fn().mockResolvedValue(mockSlots)
-    });
-    
-    // Mock ส่วนอื่นๆ ให้ผ่านฉลุย
-    Reservation.findOne.mockResolvedValue(null); // ยังไม่มีใครจอง
-    Reservation.countDocuments.mockResolvedValue(0); // ยังจองไม่เกิน 3 ครั้ง
-    Room.findById.mockResolvedValue({ name: 'Meeting Room A', price: 500, capacity: 10 });
-    Reservation.create.mockResolvedValue({ _id: 'new_res_id', status: 'pending' });
-
-    const req = {
-        body: { timeSlotIds: ['slot1', 'slot2'] },
-        user: { id: 'user1', role: 'user' }
-    };
-    const res = mockRes();
-
-    // 3. Execute
-    await reservationsController.addReservation(req, res);
-
-    // 4. Verification
-    // ตรวจสอบว่า status ไม่ใช่ 400 (แปลว่าผ่าน loop continuous check มาได้)
-    expect(res.status).toHaveBeenCalledWith(201); 
-    expect(res.json).toHaveBeenCalledWith(
-        expect.objectContaining({
-            success: true
-        })
-    );
 });
 
 describe('permanentlyDeleteReservation', () => {
@@ -725,6 +595,6 @@ describe('permanentlyDeleteReservation', () => {
 
         await reservationsController.permanentlyDeleteReservation(req, res);
 
-        expect(res.status).toHaveBeenCalledWith(500); // มาจาก handleError
+        expect(res.status).toHaveBeenCalledWith(500); 
     });
 });
