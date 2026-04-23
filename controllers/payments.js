@@ -286,10 +286,6 @@ exports.confirmQrPayment = async (req, res) => {
     }
 };
 
-
-
-
-
 // =====================================================
 // US2-3
 // @desc    Admin confirms cash received
@@ -298,10 +294,6 @@ exports.confirmQrPayment = async (req, res) => {
 // =====================================================
 exports.confirmCashPayment = async (req, res) => {
     try {
-        if (req.user.role !== 'admin') {
-            return res.status(403).json({ success: false, message: 'Admin only' });
-        }
-
         const payment = await Payment.findById(req.params.id);
 
         if (!payment) {
@@ -355,10 +347,6 @@ exports.confirmCashPayment = async (req, res) => {
 // =====================================================
 exports.getPendingCashPayments = async (req, res) => {
     try {
-        if (req.user.role !== 'admin') {
-            return res.status(403).json({ success: false, message: 'Admin only' });
-        }
-
         const payments = await Payment.find({ method: 'cash', status: 'pending' })
             .populate({
                 path: 'reservation',
@@ -482,6 +470,84 @@ exports.updatePaymentMethod = async (req, res) => {
         await payment.save();
 
         return res.status(200).json({ success: true, data: payment });
+    } catch (err) {
+        return handleError(err, res);
+    }
+};
+
+// =====================================================
+// US2-6
+// @desc    User cancels their own payment/reservation
+// @route   PUT /api/v1/payments/:id/cancel
+// @access  Private (user)
+// =====================================================
+exports.userCancelPayment = async (req, res) => {
+    try {
+        const payment = await Payment.findById(req.params.id);
+
+        if (!payment) {
+            return res.status(404).json({ success: false, message: 'Payment not found' });
+        }
+
+        // เฉพาะเจ้าของเท่านั้น
+        if (payment.user.toString() !== req.user.id) {
+            return res.status(403).json({ success: false, message: 'Not authorized' });
+        }
+
+        // เช็คว่าเวลาจองผ่านไปแล้วหรือยัง
+        const reservation = await Reservation.findById(payment.reservation)
+            .populate({ path: 'timeSlots', select: 'startTime' });
+
+        if (!reservation) {
+            return res.status(404).json({ success: false, message: 'Reservation not found' });
+        }
+
+        const now = new Date();
+        const earliest = reservation.timeSlots.reduce((min, slot) =>
+            new Date(slot.startTime) < min ? new Date(slot.startTime) : min,
+            new Date(reservation.timeSlots[0].startTime)
+        );
+
+        // Given reservation time has passed → prevent cancellation
+        if (now >= earliest) {
+            return res.status(400).json({
+                success: false,
+                message: 'Cannot cancel after reservation time has passed'
+            });
+        }
+
+        const oldStatus = payment.status;
+
+        if (oldStatus === 'pending') {
+            // Given unpaid → both become "cancelled"
+            payment.status = 'cancelled';
+            reservation.status = 'cancelled';
+
+        } else if (oldStatus === 'completed') {
+            // Given paid → payment becomes "refund_required"
+            payment.status = 'refund_required';
+            reservation.status = 'cancelled';
+            // TODO: notify admin (email/notification)
+
+        } else {
+            return res.status(400).json({
+                success: false,
+                message: `Cannot cancel payment with status "${oldStatus}"`
+            });
+        }
+
+        await payment.save();
+        await reservation.save();
+
+        return res.status(200).json({
+            success: true,
+            data: {
+                paymentId:         payment._id,
+                paymentStatus:     payment.status,
+                reservationStatus: reservation.status
+            }
+        });
+
     } catch (err) {
         return handleError(err, res);
     }

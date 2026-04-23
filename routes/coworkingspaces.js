@@ -14,21 +14,20 @@ const { getQrCode } = require('../controllers/payments');
 
 const { getRoomsByCoworking, getRoomByCoworking } = require('../controllers/rooms');
 
-const { protect } = require('../middleware/auth');
+const { protect, authorize } = require('../middleware/auth');
 
 router.route('/')
   .get(getCoworkingspaces)
-  .post(protect, createCoworkingspace);
+  .post(protect, authorize('admin'), createCoworkingspace);
 
 router.route('/:id')
   .get(getCoworkingspace)
-  .put(protect, updateCoworkingspace)
-  .delete(protect, deleteCoworkingspace);
+  .put(protect, authorize('admin'), updateCoworkingspace)
+  .delete(protect, authorize('admin'), deleteCoworkingspace);
 
 router.route('/:id/photo')
-  .put(protect, updateCoworkingspacePhoto);
+  .put(protect, authorize('admin'), updateCoworkingspacePhoto);
 
-// ✅ Nested room routes
 router.get('/:coworkingId/rooms', getRoomsByCoworking);
 router.get('/:coworkingId/rooms/:roomId', getRoomByCoworking);
 

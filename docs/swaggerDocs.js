@@ -159,8 +159,10 @@
  *           type: string
  *         reservation:
  *           type: string
+ *           description: Reservation ID
  *         user:
  *           type: string
+ *           description: User ID
  *         amount:
  *           type: number
  *           example: 600
@@ -170,17 +172,50 @@
  *         status:
  *           type: string
  *           enum: [pending, completed, failed, cancelled, refund_required, refunded]
+ *           example: "pending"
  *         transactionId:
  *           type: string
  *           nullable: true
+ *           description: Unique transaction identifier (generated on payment confirmation)
+ *         adminQrCode:
+ *           type: string
+ *           nullable: true
+ *           description: QR code ID (for QR payments)
  *         cashConfirmedBy:
  *           type: string
  *           nullable: true
+ *           description: Admin user ID who confirmed cash payment
  *         cashConfirmedAt:
  *           type: string
  *           format: date-time
  *           nullable: true
+ *           description: When cash payment was confirmed
+ *         auditLog:
+ *           type: array
+ *           items:
+ *             type: object
+ *             properties:
+ *               changedBy:
+ *                 type: string
+ *                 description: User ID who made the change
+ *               action:
+ *                 type: string
+ *                 enum: [method_change, cancel]
+ *               oldMethod:
+ *                 type: string
+ *               newMethod:
+ *                 type: string
+ *               oldStatus:
+ *                 type: string
+ *               newStatus:
+ *                 type: string
+ *               timestamp:
+ *                 type: string
+ *                 format: date-time
  *         createdAt:
+ *           type: string
+ *           format: date-time
+ *         updatedAt:
  *           type: string
  *           format: date-time
  *
@@ -1506,12 +1541,68 @@
 
 /**
  * @swagger
+ * /payments/admin/qr-code:
+ *   post:
+ *     tags: [Payments]
+ *     summary: Upload/update admin QR code image (Admin only)
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         multipart/form-data:
+ *           schema:
+ *             type: object
+ *             required: [image, spaceId]
+ *             properties:
+ *               image:
+ *                 type: string
+ *                 format: binary
+ *                 description: QR code image file (JPG, PNG, or WEBP)
+ *               spaceId:
+ *                 type: string
+ *                 description: Coworking space ID
+ *                 example: "64abc123def456"
+ *     responses:
+ *       201:
+ *         description: QR code uploaded successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                   example: true
+ *                 message:
+ *                   type: string
+ *                   example: "QR Code updated successfully"
+ *                 uploadedAt:
+ *                   type: string
+ *                   format: date-time
+ *       400:
+ *         description: No file uploaded or invalid format (must be JPG, PNG, or WEBP)
+ *       401:
+ *         description: Not authenticated
+ *       403:
+ *         description: Admin only
+ */
+
+/**
+ * @swagger
  * /payments/admin/qr-code/info:
  *   get:
  *     tags: [Payments]
  *     summary: Get admin QR code metadata/info (Admin only)
  *     security:
  *       - bearerAuth: []
+ *     parameters:
+ *       - in: query
+ *         name: spaceId
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: Coworking space ID
  *     responses:
  *       200:
  *         description: QR code info
@@ -1525,10 +1616,22 @@
  *                   example: true
  *                 data:
  *                   type: object
+ *                   properties:
+ *                     imageUrl:
+ *                       type: string
+ *                       example: "data:image/png;base64,..."
+ *                     uploadedBy:
+ *                       type: string
+ *                       description: Name of admin who uploaded
+ *                     uploadedAt:
+ *                       type: string
+ *                       format: date-time
  *       401:
  *         description: Not authenticated
  *       403:
  *         description: Admin only
+ *       404:
+ *         description: No active QR code found
  */
 
 /**
