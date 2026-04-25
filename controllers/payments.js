@@ -567,27 +567,31 @@ exports.uploadQrCode = async (req, res) => {
             return res.status(400).json({ success: false, message: 'spaceId is required' });
         }
 
-        // deactivate old QR for this space
-        await QrCode.updateMany(
-            { coworkingSpace: spaceId },
-            { isActive: false }
-        );
-
-        // convert buffer to Base64
         const imageData = req.file.buffer.toString('base64');
 
-        const qrDoc = await QrCode.create({
-            coworkingSpace: spaceId,
-            imageData,
-            mimeType  : req.file.mimetype,
-            isActive  : true,
-            uploadedBy: req.user.id
-        });
+        // ✅ upsert: update existing doc or create new one — avoids duplicate key error
+        const qrDoc = await QrCode.findOneAndUpdate(
+            { coworkingSpace: spaceId },
+            {
+                $set: {
+                    imageData,
+                    mimeType  : req.file.mimetype,
+                    isActive  : true,
+                    uploadedBy: req.user.id,
+                    updatedAt : new Date(),
+                }
+            },
+            {
+                upsert             : true,
+                new                : true,
+                setDefaultsOnInsert: true,
+            }
+        );
 
-        return res.status(201).json({
-            success    : true,
-            message    : 'QR Code updated successfully',
-            uploadedAt : qrDoc.createdAt
+        return res.status(200).json({
+            success   : true,
+            message   : 'QR Code updated successfully',
+            uploadedAt: qrDoc.updatedAt || qrDoc.createdAt,
         });
 
     } catch (err) {
@@ -597,7 +601,6 @@ exports.uploadQrCode = async (req, res) => {
         return handleError(err, res);
     }
 };
-
 // =====================================================
 // @desc    Get active admin QR code image (for user payment page)
 // @route   GET /api/v1/payments/:paymentId/qr-code
