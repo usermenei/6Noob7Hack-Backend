@@ -43,7 +43,6 @@ exports.getReservations = async (req, res) => {
   try {
     let filter = {};
 
-    // ✅ Only admin sees all
     if (req.user.role !== "admin") {
       filter.user = req.user.id;
     }
@@ -54,25 +53,48 @@ exports.getReservations = async (req, res) => {
         select: "name capacity price coworkingSpace",
         populate: {
           path: "coworkingSpace",
-          select: "name district province",
+          select: "name district province picture",
         },
       })
       .populate({
         path: "timeSlots",
         select: "startTime endTime",
-        options: { sort: { startTime: 1 } }, // ✅ always sorted
+        options: { sort: { startTime: 1 } },
       })
       .populate({
         path: "user",
         select: "name email",
       })
       .sort({ createdAt: -1 })
-      .lean(); // ✅ important for clean JSON
+      .lean();
+
+    // ✅ Fetch all relevant payments and merge into reservations
+    const reservationIds = reservations.map((r) => r._id);
+
+    const payments = await Payment.find({
+      reservation: { $in: reservationIds },
+    })
+      .select("reservation method status transactionId")
+      .lean();
+
+    // Build a quick lookup map: reservationId → payment
+    const paymentMap = {};
+    for (const p of payments) {
+      paymentMap[p.reservation.toString()] = p;
+    }
+
+    // Attach payment info to each reservation
+    const enriched = reservations.map((r) => ({
+      ...r,
+      paymentMethod: paymentMap[r._id.toString()]?.method ?? null,
+      paymentStatus: paymentMap[r._id.toString()]?.status ?? null,
+      paymentId: paymentMap[r._id.toString()]?._id ?? null,
+    }));
 
     res.status(200).json({
       success: true,
-      count: reservations.length,
-      data: reservations,
+      count: enriched.length,
+      data: enriched,
     });
   } catch (err) {
     return handleError(err, res);
