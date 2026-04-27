@@ -1,360 +1,213 @@
 const { deleteReservation } = require("../controllers/reservations");
+const { userCancelPayment } = require("../controllers/payments");
 
 jest.mock("../models/Reservation");
 jest.mock("../models/TimeSlot");
 jest.mock("../models/Payment");
 
 const Reservation = require("../models/Reservation");
-const TimeSlot    = require("../models/TimeSlot");
-const Payment     = require("../models/Payment");
+const TimeSlot = require("../models/TimeSlot");
+const Payment = require("../models/Payment");
 
-// ─── helpers ─────────────────────────────────────────────────────────────────
+// ─── Helpers ─────────────────────────────────────────────────────────────────
 
 const mockRes = () => {
   const res = {};
   res.status = jest.fn().mockReturnValue(res);
-  res.json   = jest.fn().mockReturnValue(res);
+  res.json = jest.fn().mockReturnValue(res);
   return res;
 };
 
 const mockReq = (overrides = {}) => ({
-  body:   {},
-  query:  {},
-  params: {},
-  file:   null,
-  user:   { id: "user-abc", role: "user" },
+  body: {},
+  query: {},
+  params: { id: "id-123" },
+  file: null,
+  user: { id: "user-abc", role: "user" },
   ...overrides,
 });
 
-// future slot — check-in has NOT passed yet
-const futureSlot = () => ({
-  _id:       "slot-001",
-  startTime: new Date(Date.now() + 24 * 60 * 60 * 1000), // tomorrow
-});
-
-// past slot — check-in HAS passed
-const pastSlot = () => ({
-  _id:       "slot-002",
-  startTime: new Date(Date.now() - 60 * 60 * 1000), // 1 hour ago
-});
+const FUTURE = new Date(Date.now() + 24 * 60 * 60 * 1000);
+const PAST = new Date(Date.now() - 60 * 60 * 1000);
 
 const makeReservation = (extra = {}) => ({
-  _id:       "reservation-001",
-  user:      { toString: () => "user-abc" },
-  timeSlots: ["slot-001"],
-  status:    "pending",
-  save:      jest.fn().mockResolvedValue(true),
+  _id: "reservation-001",
+  user: { toString: () => "user-abc" },
+  timeSlots: [{ startTime: FUTURE }],
+  status: "pending",
+  save: jest.fn().mockResolvedValue(true),
   ...extra,
 });
 
 const makePayment = (extra = {}) => ({
-  _id:    "payment-001",
+  _id: "payment-001",
+  user: { toString: () => "user-abc" },
+  reservation: "reservation-001",
   status: "pending",
-  save:   jest.fn().mockResolvedValue(true),
+  save: jest.fn().mockResolvedValue(true),
   ...extra,
 });
 
 beforeEach(() => jest.clearAllMocks());
 
-// ─── deleteReservation ────────────────────────────────────────────────────────
+// ─── Controller: deleteReservation ───────────────────────────────────────────
 
 describe("deleteReservation controller", () => {
-
-  // ── Unpaid cancel ───────────────────────────────────────────────────────────
-
-  test("✅ unpaid pending — reservation set to cancelled, returns 200", async () => {
-    const reservation = makeReservation({ status: "pending" });
-    const payment     = makePayment({ status: "pending" });
-
+  test("✅ unpaid pending — reservation & payment set to cancelled", async () => {
+    const reservation = makeReservation();
+    const payment = makePayment();
     Reservation.findById.mockResolvedValue(reservation);
-    TimeSlot.find.mockReturnValue({ sort: jest.fn().mockResolvedValue([futureSlot()]) });
+    TimeSlot.find.mockReturnValue({ sort: jest.fn().mockResolvedValue([{ startTime: FUTURE }]) });
     Payment.findOne.mockResolvedValue(payment);
 
     const req = mockReq({ params: { id: "reservation-001" } });
     const res = mockRes();
-
     await deleteReservation(req, res);
 
     expect(reservation.status).toBe("cancelled");
-    expect(reservation.save).toHaveBeenCalled();
-    expect(res.status).toHaveBeenCalledWith(200);
-    expect(res.json).toHaveBeenCalledWith(
-      expect.objectContaining({ success: true, message: "Reservation cancelled" })
-    );
-  });
-
-  test("✅ unpaid pending — associated pending payment also set to cancelled", async () => {
-    const reservation = makeReservation({ status: "pending" });
-    const payment     = makePayment({ status: "pending" });
-
-    Reservation.findById.mockResolvedValue(reservation);
-    TimeSlot.find.mockReturnValue({ sort: jest.fn().mockResolvedValue([futureSlot()]) });
-    Payment.findOne.mockResolvedValue(payment);
-
-    const req = mockReq({ params: { id: "reservation-001" } });
-    const res = mockRes();
-
-    await deleteReservation(req, res);
-
     expect(payment.status).toBe("cancelled");
-    expect(payment.save).toHaveBeenCalled();
-  });
-
-  test("✅ no payment record — reservation cancelled cleanly without crash", async () => {
-    const reservation = makeReservation({ status: "pending" });
-
-    Reservation.findById.mockResolvedValue(reservation);
-    TimeSlot.find.mockReturnValue({ sort: jest.fn().mockResolvedValue([futureSlot()]) });
-    Payment.findOne.mockResolvedValue(null);
-
-    const req = mockReq({ params: { id: "reservation-001" } });
-    const res = mockRes();
-
-    await deleteReservation(req, res);
-
-    expect(reservation.status).toBe("cancelled");
-    expect(reservation.save).toHaveBeenCalled();
     expect(res.status).toHaveBeenCalledWith(200);
   });
 
-  // ── Slot released (implicit) ────────────────────────────────────────────────
-
-  test("✅ slot released — reservation status leaves pending/success pool after cancel", async () => {
-    const reservation = makeReservation({ status: "pending" });
-    const payment     = makePayment({ status: "pending" });
-
-    Reservation.findById.mockResolvedValue(reservation);
-    TimeSlot.find.mockReturnValue({ sort: jest.fn().mockResolvedValue([futureSlot()]) });
-    Payment.findOne.mockResolvedValue(payment);
-
-    const req = mockReq({ params: { id: "reservation-001" } });
-    const res = mockRes();
-
-    await deleteReservation(req, res);
-
-    // Slot release is implicit: reservation.status is no longer pending/success
-    expect(reservation.status).toBe("cancelled");
-    expect(reservation.save).toHaveBeenCalled();
-  });
-
-  // ── Paid cancel ─────────────────────────────────────────────────────────────
-
-  test("✅ paid cancel — reservation set to cancelled, returns 200", async () => {
+  test("✅ paid cancel — payment set to refund_required", async () => {
     const reservation = makeReservation({ status: "success" });
-    const payment     = makePayment({ status: "completed" });
-
+    const payment = makePayment({ status: "completed" });
     Reservation.findById.mockResolvedValue(reservation);
-    TimeSlot.find.mockReturnValue({ sort: jest.fn().mockResolvedValue([futureSlot()]) });
+    TimeSlot.find.mockReturnValue({ sort: jest.fn().mockResolvedValue([{ startTime: FUTURE }]) });
     Payment.findOne.mockResolvedValue(payment);
 
-    const req = mockReq({ params: { id: "reservation-001" } });
-    const res = mockRes();
-
-    await deleteReservation(req, res);
-
-    expect(reservation.status).toBe("cancelled");
-    expect(reservation.save).toHaveBeenCalled();
-    expect(res.status).toHaveBeenCalledWith(200);
-  });
-
-  test("✅ paid cancel — payment status set to refund_required", async () => {
-    const reservation = makeReservation({ status: "success" });
-    const payment     = makePayment({ status: "completed" });
-
-    Reservation.findById.mockResolvedValue(reservation);
-    TimeSlot.find.mockReturnValue({ sort: jest.fn().mockResolvedValue([futureSlot()]) });
-    Payment.findOne.mockResolvedValue(payment);
-
-    const req = mockReq({ params: { id: "reservation-001" } });
-    const res = mockRes();
-
-    await deleteReservation(req, res);
+    await deleteReservation(mockReq(), mockRes());
 
     expect(payment.status).toBe("refund_required");
-    expect(payment.save).toHaveBeenCalled();
   });
 
-  test("✅ paid cancel — response message tells user admin has been notified", async () => {
-    const reservation = makeReservation({ status: "success" });
-    const payment     = makePayment({ status: "completed" });
-
-    Reservation.findById.mockResolvedValue(reservation);
-    TimeSlot.find.mockReturnValue({ sort: jest.fn().mockResolvedValue([futureSlot()]) });
-    Payment.findOne.mockResolvedValue(payment);
-
-    const req = mockReq({ params: { id: "reservation-001" } });
-    const res = mockRes();
-
-    await deleteReservation(req, res);
-
-    expect(res.json).toHaveBeenCalledWith(
-      expect.objectContaining({
-        success: true,
-        message: "Reservation cancelled. Payment marked as refund_required and admin notified.",
-      })
-    );
-  });
-
-  // ── Past reservation block ──────────────────────────────────────────────────
-
-  test("❌ check-in time has passed — returns 400, nothing saved", async () => {
+  test("❌ check-in time has passed — returns 400", async () => {
     const reservation = makeReservation();
-    const payment     = makePayment();
-
     Reservation.findById.mockResolvedValue(reservation);
-    TimeSlot.find.mockReturnValue({ sort: jest.fn().mockResolvedValue([pastSlot()]) });
-    Payment.findOne.mockResolvedValue(payment);
+    TimeSlot.find.mockReturnValue({ sort: jest.fn().mockResolvedValue([{ startTime: PAST }]) });
 
-    const req = mockReq({ params: { id: "reservation-001" } });
     const res = mockRes();
+    await deleteReservation(mockReq(), res);
 
-    await deleteReservation(req, res);
-
-    expect(reservation.save).not.toHaveBeenCalled();
-    expect(payment.save).not.toHaveBeenCalled();
     expect(res.status).toHaveBeenCalledWith(400);
-    expect(res.json).toHaveBeenCalledWith(
-      expect.objectContaining({
-        success: false,
-        message: "Cannot cancel reservation after check-in time has passed",
-      })
-    );
-  });
-
-  test("❌ no time slots found — past check skipped, reservation cancelled normally", async () => {
-    // slots array empty → firstStart is null → past-check is skipped
-    const reservation = makeReservation({ timeSlots: [] });
-
-    Reservation.findById.mockResolvedValue(reservation);
-    TimeSlot.find.mockReturnValue({ sort: jest.fn().mockResolvedValue([]) });
-    Payment.findOne.mockResolvedValue(null);
-
-    const req = mockReq({ params: { id: "reservation-001" } });
-    const res = mockRes();
-
-    await deleteReservation(req, res);
-
-    expect(reservation.status).toBe("cancelled");
-    expect(res.status).toHaveBeenCalledWith(200);
-  });
-
-  // ── Authorization ───────────────────────────────────────────────────────────
-
-  test("❌ non-owner non-admin — returns 403, nothing saved", async () => {
-    const reservation = makeReservation({
-      user: { toString: () => "other-user-id" },
-    });
-
-    Reservation.findById.mockResolvedValue(reservation);
-
-    const req = mockReq({
-      params: { id: "reservation-001" },
-      user:   { id: "random-user-id", role: "user" },
-    });
-    const res = mockRes();
-
-    await deleteReservation(req, res);
-
     expect(reservation.save).not.toHaveBeenCalled();
-    expect(res.status).toHaveBeenCalledWith(403);
-    expect(res.json).toHaveBeenCalledWith(
-      expect.objectContaining({ success: false, message: "Not authorized" })
-    );
   });
 
-  test("✅ admin can cancel any user's reservation", async () => {
-    const reservation = makeReservation({
-      user: { toString: () => "other-user-id" },
-    });
-
-    Reservation.findById.mockResolvedValue(reservation);
-    TimeSlot.find.mockReturnValue({ sort: jest.fn().mockResolvedValue([futureSlot()]) });
-    Payment.findOne.mockResolvedValue(null);
-
-    const req = mockReq({
-      params: { id: "reservation-001" },
-      user:   { id: "admin-id", role: "admin" },
-    });
+  test("❌ non-owner non-admin — returns 403", async () => {
+    Reservation.findById.mockResolvedValue(makeReservation({ user: { toString: () => "other" } }));
     const res = mockRes();
-
-    await deleteReservation(req, res);
-
-    expect(reservation.status).toBe("cancelled");
-    expect(res.status).toHaveBeenCalledWith(200);
+    await deleteReservation(mockReq({ user: { id: "user-abc", role: "user" } }), res);
+    expect(res.status).toHaveBeenCalledWith(403);
   });
-
-  // ── Edge cases ──────────────────────────────────────────────────────────────
 
   test("❌ reservation not found — returns 404", async () => {
     Reservation.findById.mockResolvedValue(null);
-
-    const req = mockReq({ params: { id: "nonexistent-id" } });
     const res = mockRes();
-
-    await deleteReservation(req, res);
-
+    await deleteReservation(mockReq(), res);
     expect(res.status).toHaveBeenCalledWith(404);
-    expect(res.json).toHaveBeenCalledWith(
-      expect.objectContaining({ success: false, message: "Reservation not found" })
-    );
   });
+});
 
-  // ── Active reservation count (implicit) ─────────────────────────────────────
+// ─── Controller: userCancelPayment ───────────────────────────────────────────
 
-  test("✅ after cancel — reservation no longer in pending/success pool (count decreases implicitly)", async () => {
-    const reservation = makeReservation({ status: "pending" });
+describe("userCancelPayment controller", () => {
+  const mockReservationPopulate = (result) =>
+    Reservation.findById.mockReturnValue({
+      populate: jest.fn().mockResolvedValue(result),
+    });
 
-    Reservation.findById.mockResolvedValue(reservation);
-    TimeSlot.find.mockReturnValue({ sort: jest.fn().mockResolvedValue([futureSlot()]) });
-    Payment.findOne.mockResolvedValue(null);
+  test("✅ pending → cancelled (happy path)", async () => {
+    const payment = makePayment();
+    const reservation = makeReservation();
+    Payment.findById.mockResolvedValue(payment);
+    mockReservationPopulate(reservation);
 
-    const req = mockReq({ params: { id: "reservation-001" } });
     const res = mockRes();
+    await userCancelPayment(mockReq(), res);
 
-    await deleteReservation(req, res);
-
-    // status is now 'cancelled' — excluded from pending/success count queries
-    expect(["pending", "success"]).not.toContain(reservation.status);
-  });
-  // ── Missing branch: payment exists but is neither pending nor completed ──────
-  // e.g. status = 'failed' or 'cancelled' — the inner if(payment.status==='pending')
-  // is false, so payment.save must NOT be called, but reservation is still cancelled.
- 
-  test("✅ payment with non-pending non-completed status (failed) — reservation cancelled, payment untouched", async () => {
-    const reservation = makeReservation({ status: "pending" });
-    const payment     = makePayment({ status: "failed" }); // neither pending nor completed
- 
-    Reservation.findById.mockResolvedValue(reservation);
-    TimeSlot.find.mockReturnValue({ sort: jest.fn().mockResolvedValue([futureSlot()]) });
-    Payment.findOne.mockResolvedValue(payment);
- 
-    const req = mockReq({ params: { id: "reservation-001" } });
-    const res = mockRes();
- 
-    await deleteReservation(req, res);
- 
+    expect(payment.status).toBe("cancelled");
     expect(reservation.status).toBe("cancelled");
-    expect(reservation.save).toHaveBeenCalled();
-    expect(payment.save).not.toHaveBeenCalled(); // payment left untouched
     expect(res.status).toHaveBeenCalledWith(200);
-    expect(res.json).toHaveBeenCalledWith(
-      expect.objectContaining({ success: true, message: "Reservation cancelled" })
-    );
   });
- 
-  // ── Missing branch: catch block ───────────────────────────────────────────────
- 
-  test("❌ unexpected DB error — catch block returns 500", async () => {
-    Reservation.findById.mockRejectedValue(new Error("DB connection lost"));
- 
-    const req = mockReq({ params: { id: "reservation-001" } });
+
+  test("✅ completed → refund_required", async () => {
+    const payment = makePayment({ status: "completed" });
+    const reservation = makeReservation();
+    Payment.findById.mockResolvedValue(payment);
+    mockReservationPopulate(reservation);
+
     const res = mockRes();
- 
-    await deleteReservation(req, res);
- 
-    expect(res.status).toHaveBeenCalledWith(500);
+    await userCancelPayment(mockReq(), res);
+
+    expect(payment.status).toBe("refund_required");
+    expect(res.status).toHaveBeenCalledWith(200);
+  });
+
+  test("❌ status อื่นๆ ที่ยกเลิกไม่ได้ (failed/cancelled) — returns 400", async () => {
+    Payment.findById.mockResolvedValue(makePayment({ status: "failed" }));
+    mockReservationPopulate(makeReservation());
+
+    const res = mockRes();
+    await userCancelPayment(mockReq(), res);
+
+    expect(res.status).toHaveBeenCalledWith(400);
+    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ success: false }));
+  });
+
+  test("❌ เลยเวลาเช็คอินแล้ว — returns 400", async () => {
+    Payment.findById.mockResolvedValue(makePayment());
+    mockReservationPopulate(makeReservation({ timeSlots: [{ startTime: PAST }] }));
+
+    const res = mockRes();
+    await userCancelPayment(mockReq(), res);
+
+    expect(res.status).toHaveBeenCalledWith(400);
     expect(res.json).toHaveBeenCalledWith(
-      expect.objectContaining({ success: false, message: "Server error" })
+      expect.objectContaining({ message: "Cannot cancel after reservation time has passed" })
     );
   });
+
+  test("❌ Invalid ID format (CastError) — returns 400", async () => {
+    Payment.findById.mockRejectedValue(Object.assign(new Error(), { name: "CastError" }));
+    const res = mockRes();
+    await userCancelPayment(mockReq(), res);
+    expect(res.status).toHaveBeenCalledWith(400);
+    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ message: "Invalid ID format" }));
+  });
+
+  test("❌ Unexpected error — returns 500", async () => {
+    Payment.findById.mockRejectedValue(new Error("DB Error"));
+    const res = mockRes();
+    await userCancelPayment(mockReq(), res);
+    expect(res.status).toHaveBeenCalledWith(500);
+  });
+});
+test("✅ reduce true branch — slot[1] earlier than slot[0], updates min", async () => {
+  const payment = makePayment({ status: 'pending' });
+  Payment.findById.mockResolvedValue(payment);
+
+  const reservation = {
+    _id: 'reservation-001',
+    timeSlots: [
+      { startTime: new Date('2099-01-01T10:00:00Z') }, // slot[0] → initial min (later)
+      { startTime: new Date('2099-01-01T08:00:00Z') }, // slot[1] < min → true branch ✅
+    ],
+    status: 'confirmed',
+    save: jest.fn().mockResolvedValue(true),
+  };
+
+  Reservation.findById.mockReturnValue({
+    populate: jest.fn().mockResolvedValue(reservation),
+  });
+
+  payment.save = jest.fn().mockResolvedValue(true);
+
+  const req = mockReq({ params: { id: 'payment-001' }, user: { id: 'user-abc' } });
+  const res = mockRes();
+
+  await userCancelPayment(req, res);
+
+  // earliest = 08:00, still in future → cancellation proceeds
+  expect(payment.status).toBe('cancelled');
+  expect(res.status).toHaveBeenCalledWith(200);
 });

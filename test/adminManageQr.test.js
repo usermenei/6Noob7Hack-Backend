@@ -4,6 +4,7 @@ jest.mock("../models/Payment");
 jest.mock("../models/Reservation");
 jest.mock("../models/QrCode");
 
+
 const Payment     = require("../models/Payment");
 const Reservation = require("../models/Reservation");
 const QrCode      = require("../models/QrCode");
@@ -50,6 +51,7 @@ const makeQrDoc = (extra = {}) => ({
   imageData: Buffer.from("fake-image").toString("base64"),
   isActive:  true,
   createdAt: new Date("2025-01-01"),
+  updatedAt: new Date("2025-01-01"),
   ...extra,
 });
 
@@ -64,9 +66,10 @@ beforeEach(() => jest.clearAllMocks());
 
 describe("uploadQrCode controller", () => {
 
-  test("✅ valid PNG — deactivates old, creates new, returns 201", async () => {
-    QrCode.updateMany.mockResolvedValue({});
-    QrCode.create.mockResolvedValue({ createdAt: new Date("2025-01-01") });
+  // ✅ controller ใช้ findOneAndUpdate (upsert) → คืน status 200 พร้อม uploadedAt
+  test("✅ valid PNG — upserts QR, returns 200 with uploadedAt", async () => {
+    const updatedAt = new Date("2025-01-01");
+    QrCode.findOneAndUpdate.mockResolvedValue({ updatedAt });
 
     const req = mockReq({
       body: { spaceId: "space-001" },
@@ -76,15 +79,14 @@ describe("uploadQrCode controller", () => {
 
     await uploadQrCode(req, res);
 
-    expect(res.status).toHaveBeenCalledWith(201);
+    expect(res.status).toHaveBeenCalledWith(200);
     expect(res.json).toHaveBeenCalledWith(
       expect.objectContaining({ success: true, message: "QR Code updated successfully" })
     );
   });
 
-  test("✅ valid JPG — returns 201", async () => {
-    QrCode.updateMany.mockResolvedValue({});
-    QrCode.create.mockResolvedValue({ createdAt: new Date() });
+  test("✅ valid JPG — returns 200", async () => {
+    QrCode.findOneAndUpdate.mockResolvedValue({ updatedAt: new Date() });
 
     const req = mockReq({
       body: { spaceId: "space-001" },
@@ -94,12 +96,11 @@ describe("uploadQrCode controller", () => {
 
     await uploadQrCode(req, res);
 
-    expect(res.status).toHaveBeenCalledWith(201);
+    expect(res.status).toHaveBeenCalledWith(200);
   });
 
-  test("✅ valid WEBP — returns 201", async () => {
-    QrCode.updateMany.mockResolvedValue({});
-    QrCode.create.mockResolvedValue({ createdAt: new Date() });
+  test("✅ valid WEBP — returns 200", async () => {
+    QrCode.findOneAndUpdate.mockResolvedValue({ updatedAt: new Date() });
 
     const req = mockReq({
       body: { spaceId: "space-001" },
@@ -109,13 +110,13 @@ describe("uploadQrCode controller", () => {
 
     await uploadQrCode(req, res);
 
-    expect(res.status).toHaveBeenCalledWith(201);
+    expect(res.status).toHaveBeenCalledWith(200);
   });
 
-  test("✅ replaces old QR — updateMany deactivates old, create sets new active + uploadedAt", async () => {
-    QrCode.updateMany.mockResolvedValue({ modifiedCount: 1 });
-    const createdAt = new Date("2025-06-01");
-    QrCode.create.mockResolvedValue({ createdAt });
+  // ✅ เช็คว่า findOneAndUpdate ถูกเรียกด้วย params ที่ถูกต้อง (upsert pattern)
+  test("✅ calls findOneAndUpdate with correct spaceId and isActive:true", async () => {
+    const updatedAt = new Date("2025-06-01");
+    QrCode.findOneAndUpdate.mockResolvedValue({ updatedAt });
 
     const req = mockReq({
       body: { spaceId: "space-001" },
@@ -125,20 +126,19 @@ describe("uploadQrCode controller", () => {
 
     await uploadQrCode(req, res);
 
-    expect(QrCode.updateMany).toHaveBeenCalledWith(
+    expect(QrCode.findOneAndUpdate).toHaveBeenCalledWith(
       { coworkingSpace: "space-001" },
-      { isActive: false }
-    );
-    expect(QrCode.create).toHaveBeenCalledWith(
       expect.objectContaining({
-        coworkingSpace: "space-001",
-        isActive:       true,
-        uploadedBy:     "admin-user-id",
-        mimeType:       "image/png",
-      })
+        $set: expect.objectContaining({
+          isActive:   true,
+          uploadedBy: "admin-user-id",
+          mimeType:   "image/png",
+        }),
+      }),
+      expect.objectContaining({ upsert: true, new: true })
     );
     expect(res.json).toHaveBeenCalledWith(
-      expect.objectContaining({ success: true, uploadedAt: createdAt })
+      expect.objectContaining({ success: true, uploadedAt: updatedAt })
     );
   });
 
@@ -169,8 +169,8 @@ describe("uploadQrCode controller", () => {
     );
   });
 
-  test("❌ invalid format — catch returns 400 'Format Not Supported'", async () => {
-    QrCode.updateMany.mockRejectedValue(new Error("Format Not Supported"));
+  test("❌ DB throws 'Format Not Supported' — returns 400", async () => {
+    QrCode.findOneAndUpdate.mockRejectedValue(new Error("Format Not Supported"));
 
     const req = mockReq({
       body: { spaceId: "space-001" },
@@ -191,8 +191,6 @@ describe("uploadQrCode controller", () => {
 });
 
 // ─── getQrCode ────────────────────────────────────────────────────────────────
-// Route: GET /api/v1/payments/:id/qr-code
-// Finds payment by id → checks auth/method/status → reservation → QrCode → returns dataUrl JSON
 
 describe("getQrCode controller", () => {
 
@@ -355,8 +353,6 @@ describe("getQrCode controller", () => {
 });
 
 // ─── getQrCodeBySpace ─────────────────────────────────────────────────────────
-// Route: GET /api/v1/payments/admin/qr-code/:spaceId
-// Admin dashboard — returns dataUrl + uploadedBy + uploadedAt
 
 describe("getQrCodeBySpace controller", () => {
 
@@ -423,51 +419,129 @@ describe("getQrCodeBySpace controller", () => {
       })
     );
   });
+
   test("❌ missing spaceId param — returns 400 'spaceId is required'", async () => {
-    // params.spaceId is undefined → hits the !spaceId guard
     const req = mockReq({ params: {} });
     const res = mockRes();
- 
+
     await getQrCodeBySpace(req, res);
- 
+
     expect(res.status).toHaveBeenCalledWith(400);
     expect(res.json).toHaveBeenCalledWith(
       expect.objectContaining({ success: false, message: "spaceId is required" })
     );
   });
- 
+
   test("❌ DB error in getQrCodeBySpace — catch block returns 500", async () => {
     QrCode.findOne.mockReturnValue({
       populate: jest.fn().mockRejectedValue(new Error("DB error")),
     });
- 
+
     const req = mockReq({ params: { spaceId: "space-001" } });
     const res = mockRes();
- 
+
     await getQrCodeBySpace(req, res);
- 
+
     expect(res.status).toHaveBeenCalledWith(500);
     expect(res.json).toHaveBeenCalledWith(
       expect.objectContaining({ success: false })
     );
   });
 });
- 
+
 // ─── catch block coverage ─────────────────────────────────────────────────────
- 
+
 describe("getQrCode — catch block", () => {
- 
+
   test("❌ DB error in getQrCode — catch block returns 500", async () => {
     Payment.findById.mockRejectedValue(new Error("DB connection lost"));
- 
+
     const req = mockReq({ params: { id: "payment-001" }, user: { id: "user-abc", role: "user" } });
     const res = mockRes();
- 
+
     await getQrCode(req, res);
- 
+
     expect(res.status).toHaveBeenCalledWith(500);
     expect(res.json).toHaveBeenCalledWith(
       expect.objectContaining({ success: false })
     );
   });
+});
+describe("uploadQrCode — handleError branches", () => {
+
+  test("❌ CastError — returns 400 'Invalid ID format'", async () => {
+    const err = new Error("bad id");
+    err.name = "CastError";
+    QrCode.findOneAndUpdate.mockRejectedValue(err);
+
+    const req = mockReq({
+      body: { spaceId: "space-001" },
+      file: { mimetype: "image/png", buffer: Buffer.from("x"), originalname: "qr.png" },
+    });
+    const res = mockRes();
+
+    await uploadQrCode(req, res);
+
+    expect(res.status).toHaveBeenCalledWith(400);
+    expect(res.json).toHaveBeenCalledWith(
+      expect.objectContaining({ success: false, message: "Invalid ID format" })
+    );
+  });
+
+  test("❌ ValidationError — returns 400 with err.message", async () => {
+    const err = new Error("field is required");
+    err.name = "ValidationError";
+    QrCode.findOneAndUpdate.mockRejectedValue(err);
+
+    const req = mockReq({
+      body: { spaceId: "space-001" },
+      file: { mimetype: "image/png", buffer: Buffer.from("x"), originalname: "qr.png" },
+    });
+    const res = mockRes();
+
+    await uploadQrCode(req, res);
+
+    expect(res.status).toHaveBeenCalledWith(400);
+    expect(res.json).toHaveBeenCalledWith(
+      expect.objectContaining({ success: false, message: "field is required" })
+    );
+  });
+
+  test("❌ generic error — returns 500 'Server error'", async () => {
+    const err = new Error("Unexpected DB failure"); // name defaults to 'Error'
+    QrCode.findOneAndUpdate.mockRejectedValue(err);
+
+    const req = mockReq({
+      body: { spaceId: "space-001" },
+      file: { mimetype: "image/png", buffer: Buffer.from("x"), originalname: "qr.png" },
+    });
+    const res = mockRes();
+
+    await uploadQrCode(req, res);
+
+    expect(res.status).toHaveBeenCalledWith(500);
+    expect(res.json).toHaveBeenCalledWith(
+      expect.objectContaining({ success: false, message: "Server error" })
+    );
+  });
+});
+test("✅ falls back to createdAt when updatedAt is absent", async () => {
+  const createdAt = new Date("2025-06-01");
+  QrCode.findOneAndUpdate.mockResolvedValue({
+    updatedAt: null,   // falsy → triggers || branch ✅
+    createdAt,
+  });
+
+  const req = mockReq({
+    body: { spaceId: "space-001" },
+    file: { mimetype: "image/png", buffer: Buffer.from("x"), originalname: "qr.png" },
+  });
+  const res = mockRes();
+
+  await uploadQrCode(req, res);
+
+  expect(res.status).toHaveBeenCalledWith(200);
+  expect(res.json).toHaveBeenCalledWith(
+    expect.objectContaining({ success: true, uploadedAt: createdAt })
+  );
 });

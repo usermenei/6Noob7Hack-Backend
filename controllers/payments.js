@@ -45,7 +45,8 @@ const markReservationSuccess = async (reservationId) => {
 // =====================================================
 // Helper: Calculate total amount from time slots
 // =====================================================
-const calcAmount = (room, slotCount) => room.price * slotCount;
+//Temp delete (Revert if program broke)
+//const calcAmount = (room, slotCount) => room.price * slotCount;
 
 
 // =====================================================

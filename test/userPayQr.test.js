@@ -295,4 +295,72 @@ describe('confirmQrPayment controller', () => {
       isActive:       true,
     });
   });
+  // ── Error / catch block ─────────────────────────────────────────────────────
+
+test('❌ Payment.findById throws — catch block calls handleError, returns 500', async () => {
+  Payment.findById.mockRejectedValue(new Error('DB connection lost'));
+
+  const req = mockReq({ params: { id: 'payment-001' } });
+  const res = mockRes();
+
+  await confirmQrPayment(req, res);
+
+  expect(res.status).toHaveBeenCalledWith(500);
+  expect(res.json).toHaveBeenCalledWith(
+    expect.objectContaining({ success: false })
+  );
+});
+
+test('❌ Reservation.findById throws — catch block calls handleError, returns 500', async () => {
+  Payment.findById.mockResolvedValue(makePayment());
+  Reservation.findById.mockReturnValue({
+    populate: jest.fn().mockRejectedValue(new Error('Reservation DB error')),
+  });
+
+  const req = mockReq({ params: { id: 'payment-001' } });
+  const res = mockRes();
+
+  await confirmQrPayment(req, res);
+
+  expect(res.status).toHaveBeenCalledWith(500);
+  expect(res.json).toHaveBeenCalledWith(
+    expect.objectContaining({ success: false })
+  );
+});
+
+test('❌ QrCode.findOne throws — catch block calls handleError, returns 500', async () => {
+  Payment.findById.mockResolvedValue(makePayment());
+  mockReservationFind(makeReservation());
+  QrCode.findOne.mockRejectedValue(new Error('QR DB error'));
+
+  const req = mockReq({ params: { id: 'payment-001' } });
+  const res = mockRes();
+
+  await confirmQrPayment(req, res);
+
+  expect(res.status).toHaveBeenCalledWith(500);
+  expect(res.json).toHaveBeenCalledWith(
+    expect.objectContaining({ success: false })
+  );
+});
+
+test('❌ payment.save throws — catch block calls handleError, returns 500', async () => {
+  const payment = makePayment({
+    save: jest.fn().mockRejectedValue(new Error('Save failed')),
+  });
+  Payment.findById.mockResolvedValue(payment);
+  mockReservationFind(makeReservation());
+  QrCode.findOne.mockResolvedValue(makeQrCode());
+  Reservation.findByIdAndUpdate = jest.fn().mockResolvedValue(true);
+
+  const req = mockReq({ params: { id: 'payment-001' } });
+  const res = mockRes();
+
+  await confirmQrPayment(req, res);
+
+  expect(res.status).toHaveBeenCalledWith(500);
+  expect(res.json).toHaveBeenCalledWith(
+    expect.objectContaining({ success: false })
+  );
+});
 });

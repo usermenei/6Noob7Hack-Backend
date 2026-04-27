@@ -11,15 +11,16 @@ jest.mock('../models/Reservation', () => ({
 jest.mock('../models/Room', () => ({ findById: jest.fn() }));
 jest.mock('../models/TimeSlot', () => ({ find: jest.fn() }));
 jest.mock('../models/User', () => ({ findByIdAndUpdate: jest.fn() }));
-// Add the Payment mock here
-jest.mock('../models/Payment', () => ({ findOne: jest.fn() })); 
+jest.mock('../models/Payment', () => ({
+  findOne: jest.fn(),
+  find: jest.fn(),  // ✅ เพิ่ม find เพราะ getReservations ใช้ Payment.find()
+}));
 
 const Reservation = require('../models/Reservation');
 const Room = require('../models/Room');
 const TimeSlot = require('../models/TimeSlot');
 const User = require('../models/User');
-// Require the Payment model here
-const Payment = require('../models/Payment'); 
+const Payment = require('../models/Payment');
 
 function mockRes() {
   const res = {};
@@ -41,7 +42,14 @@ function timeslotFind(slots) {
   return { sort: jest.fn().mockResolvedValue(slots) };
 }
 
-beforeEach(() => jest.clearAllMocks());
+beforeEach(() => {
+  jest.clearAllMocks();
+  // ✅ default mock Payment.find → ส่งคืน [] เสมอ (chainable)
+  Payment.find.mockReturnValue({
+    select: jest.fn().mockReturnThis(),
+    lean: jest.fn().mockResolvedValue([]),
+  });
+});
 
 describe('handleError (via getReservations)', () => {
   test('handles duplicate key error (code 11000)', async () => {
@@ -79,24 +87,167 @@ describe('handleError (via getReservations)', () => {
 
 describe('getReservations', () => {
   test('admin sees all reservations', async () => {
-    const data = [{ id: 1 }, { id: 2 }];
+    const data = [{ _id: '1' }, { _id: '2' }];
     Reservation.find.mockReturnValue(chainableResolve(data));
+    // ✅ Payment.find คืน [] เพื่อ enriched map จะใส่ paymentMethod: null
+    Payment.find.mockReturnValue({
+      select: jest.fn().mockReturnThis(),
+      lean: jest.fn().mockResolvedValue([]),
+    });
+
     const req = { user: { role: 'admin' } };
     const res = mockRes();
     await reservationsController.getReservations(req, res);
+
     expect(Reservation.find).toHaveBeenCalledWith({});
     expect(res.status).toHaveBeenCalledWith(200);
-    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ success: true, count: 2, data }));
+    // ✅ data จะถูก enrich → เช็ค count และ success แทน data ตรงๆ
+    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ success: true, count: 2 }));
   });
 
   test('non-admin sees only their own reservations', async () => {
-    const data = [{ id: 3 }];
+    const data = [{ _id: '3' }];
     Reservation.find.mockReturnValue(chainableResolve(data));
+    Payment.find.mockReturnValue({
+      select: jest.fn().mockReturnThis(),
+      lean: jest.fn().mockResolvedValue([]),
+    });
+
     const req = { user: { role: 'user', id: 'u1' } };
     const res = mockRes();
     await reservationsController.getReservations(req, res);
+
     expect(Reservation.find).toHaveBeenCalledWith({ user: 'u1' });
     expect(res.status).toHaveBeenCalledWith(200);
+  });
+});
+
+describe('getReservations — paymentMap enrichment', () => {
+  // helper สร้าง payment mock ที่มี reservation field เป็น object ที่ toString() ได้
+  function makePayment(reservationId, extra = {}) {
+    return {
+      reservation: { toString: () => reservationId },
+      method: 'qr',
+      status: 'completed',
+      _id: `pay-${reservationId}`,
+      ...extra,
+    };
+  }
+
+  function setupReservations(reservations) {
+    Reservation.find.mockReturnValue(chainableResolve(reservations));
+  }
+
+  function setupPayments(payments) {
+    Payment.find.mockReturnValue({
+      select: jest.fn().mockReturnThis(),
+      lean: jest.fn().mockResolvedValue(payments),
+    });
+  }
+
+  test('reservation ที่มี payment → enriched ด้วย paymentMethod, paymentStatus, paymentId', async () => {
+    const reservations = [{ _id: { toString: () => 'res-1' } }];
+    const payments = [makePayment('res-1', { method: 'qr', status: 'completed', _id: 'pay-1' })];
+
+    setupReservations(reservations);
+    setupPayments(payments);
+
+    const req = { user: { role: 'admin' } };
+    const res = mockRes();
+    await reservationsController.getReservations(req, res);
+
+    const enriched = res.json.mock.calls[0][0].data[0];
+    expect(enriched.paymentMethod).toBe('qr');
+    expect(enriched.paymentStatus).toBe('completed');
+    expect(enriched.paymentId).toBe('pay-1');
+  });
+
+  test('reservation ที่ไม่มี payment → paymentMethod, paymentStatus, paymentId เป็น null', async () => {
+    const reservations = [{ _id: { toString: () => 'res-no-pay' } }];
+
+    setupReservations(reservations);
+    setupPayments([]); // ไม่มี payment เลย
+
+    const req = { user: { role: 'admin' } };
+    const res = mockRes();
+    await reservationsController.getReservations(req, res);
+
+    const enriched = res.json.mock.calls[0][0].data[0];
+    expect(enriched.paymentMethod).toBeNull();
+    expect(enriched.paymentStatus).toBeNull();
+    expect(enriched.paymentId).toBeNull();
+  });
+
+  test('หลาย reservation — แต่ละอันได้ payment ของตัวเองถูกต้อง (ไม่ปนกัน)', async () => {
+    const reservations = [
+      { _id: { toString: () => 'res-A' } },
+      { _id: { toString: () => 'res-B' } },
+      { _id: { toString: () => 'res-C' } },
+    ];
+    const payments = [
+      makePayment('res-A', { method: 'cash', status: 'pending', _id: 'pay-A' }),
+      makePayment('res-C', { method: 'qr',   status: 'completed', _id: 'pay-C' }),
+      // res-B ไม่มี payment
+    ];
+
+    setupReservations(reservations);
+    setupPayments(payments);
+
+    const req = { user: { role: 'admin' } };
+    const res = mockRes();
+    await reservationsController.getReservations(req, res);
+
+    const data = res.json.mock.calls[0][0].data;
+    const resA = data.find(r => r._id.toString() === 'res-A');
+    const resB = data.find(r => r._id.toString() === 'res-B');
+    const resC = data.find(r => r._id.toString() === 'res-C');
+
+    expect(resA.paymentMethod).toBe('cash');
+    expect(resA.paymentStatus).toBe('pending');
+    expect(resA.paymentId).toBe('pay-A');
+
+    expect(resB.paymentMethod).toBeNull();
+    expect(resB.paymentStatus).toBeNull();
+    expect(resB.paymentId).toBeNull();
+
+    expect(resC.paymentMethod).toBe('qr');
+    expect(resC.paymentStatus).toBe('completed');
+    expect(resC.paymentId).toBe('pay-C');
+  });
+
+  test('Payment.find ถูกเรียกด้วย reservationIds ที่ถูกต้อง', async () => {
+    const reservations = [
+      { _id: { toString: () => 'res-X' } },
+      { _id: { toString: () => 'res-Y' } },
+    ];
+
+    setupReservations(reservations);
+    setupPayments([]);
+
+    const req = { user: { role: 'admin' } };
+    const res = mockRes();
+    await reservationsController.getReservations(req, res);
+
+    expect(Payment.find).toHaveBeenCalledWith({
+      reservation: { $in: reservations.map(r => r._id) },
+    });
+  });
+
+  test('count ใน response ตรงกับจำนวน reservation จริง (ไม่นับ payment)', async () => {
+    const reservations = [
+      { _id: { toString: () => 'res-1' } },
+      { _id: { toString: () => 'res-2' } },
+      { _id: { toString: () => 'res-3' } },
+    ];
+
+    setupReservations(reservations);
+    setupPayments([makePayment('res-1')]); // มีแค่ 1 payment แต่ count ต้องเป็น 3
+
+    const req = { user: { role: 'admin' } };
+    const res = mockRes();
+    await reservationsController.getReservations(req, res);
+
+    expect(res.json.mock.calls[0][0].count).toBe(3);
   });
 });
 
@@ -344,15 +495,13 @@ describe('deleteReservation', () => {
   test('200 on successful cancellation by owner', async () => {
     const reservation = { _id: 'res-1', user: { toString: () => 'u1' }, status: 'pending', timeSlots: [], save: jest.fn().mockResolvedValue(true) };
     Reservation.findById.mockResolvedValue(reservation);
-    
-    // Mock the new dependencies
-    TimeSlot.find.mockReturnValue(timeslotFind([])); // Empty array bypasses the check-in time error
-    Payment.findOne.mockResolvedValue(null);         // Simulates no existing payment
-    
+    TimeSlot.find.mockReturnValue(timeslotFind([]));
+    Payment.findOne.mockResolvedValue(null);
+
     const req = { params: { id: 'r' }, user: { id: 'u1', role: 'user' } };
     const res = mockRes();
     await reservationsController.deleteReservation(req, res);
-    
+
     expect(reservation.status).toBe('cancelled');
     expect(reservation.save).toHaveBeenCalled();
     expect(res.status).toHaveBeenCalledWith(200);
@@ -362,15 +511,13 @@ describe('deleteReservation', () => {
   test('200 when admin cancels any reservation', async () => {
     const reservation = { _id: 'res-2', user: { toString: () => 'other' }, status: 'pending', timeSlots: [], save: jest.fn().mockResolvedValue(true) };
     Reservation.findById.mockResolvedValue(reservation);
-    
-    // Mock the new dependencies
-    TimeSlot.find.mockReturnValue(timeslotFind([])); 
+    TimeSlot.find.mockReturnValue(timeslotFind([]));
     Payment.findOne.mockResolvedValue(null);
 
     const req = { params: { id: 'r' }, user: { id: 'admin1', role: 'admin' } };
     const res = mockRes();
     await reservationsController.deleteReservation(req, res);
-    
+
     expect(res.status).toHaveBeenCalledWith(200);
   });
 
@@ -425,11 +572,10 @@ describe('confirmReservation', () => {
 });
 
 describe('updateReservation, deleteReservation, confirmReservation', () => {
-  // Logic for updateReservation success
   test('updateReservation: 200 on success', async () => {
     const resv = { _id: 'r1', user: 'u1', status: 'pending', save: jest.fn() };
     Reservation.findById.mockResolvedValue(resv);
-    Reservation.findOne.mockResolvedValue(null); // No conflict
+    Reservation.findOne.mockResolvedValue(null);
 
     const req = { params: { id: 'r1' }, body: { timeSlotIds: ['ts2'] }, user: { id: 'u1' } };
     const res = mockRes();
@@ -437,7 +583,6 @@ describe('updateReservation, deleteReservation, confirmReservation', () => {
     expect(res.status).toHaveBeenCalledWith(200);
   });
 
-  // Logic for confirmReservation (Admin only)
   test('confirmReservation: 200 and increments user entries', async () => {
     const resv = { _id: 'r1', user: 'u1', save: jest.fn() };
     Reservation.findById.mockResolvedValue(resv);
@@ -454,10 +599,10 @@ describe('updateReservation, deleteReservation, confirmReservation', () => {
 
 describe('handleError branch coverage', () => {
   test('handles error without code or name (fallback to 500)', async () => {
-    Reservation.find.mockImplementation(() => { 
+    Reservation.find.mockImplementation(() => {
       const err = new Error('Generic');
-      delete err.stack; 
-      throw err; 
+      delete err.stack;
+      throw err;
     });
     const res = mockRes();
     await reservationsController.getReservations({ user: { role: 'admin' } }, res);
@@ -473,27 +618,27 @@ describe('addReservation deep branch coverage', () => {
     await reservationsController.addReservation(req, res);
     expect(res.status).toHaveBeenCalledWith(400);
   });
-}); 
+});
 
 describe('updateReservation admin branch', () => {
   test('Line 245: Admin can update even if not owner', async () => {
-    const reservation = { 
-      _id: 'r1', 
+    const reservation = {
+      _id: 'r1',
       user: 'other-user-id',
-      status: 'pending', 
-      save: jest.fn().mockResolvedValue(true) 
+      status: 'pending',
+      save: jest.fn().mockResolvedValue(true)
     };
     Reservation.findById.mockResolvedValue(reservation);
     Reservation.findOne.mockResolvedValue(null);
 
-    const req = { 
-      params: { id: 'r1' }, 
-      user: { id: 'admin-id', role: 'admin' }, 
-      body: { timeSlotIds: ['tsnew'] } 
+    const req = {
+      params: { id: 'r1' },
+      user: { id: 'admin-id', role: 'admin' },
+      body: { timeSlotIds: ['tsnew'] }
     };
     const res = mockRes();
     await reservationsController.updateReservation(req, res);
-    
+
     expect(res.status).toHaveBeenCalledWith(200);
     expect(reservation.save).toHaveBeenCalled();
   });
@@ -510,91 +655,91 @@ describe('confirmReservation error branches', () => {
 });
 
 describe('permanentlyDeleteReservation', () => {
-    test('200 Success: should delete reservation if user is the owner', async () => {
-        const mockResv = {
-            user: { toString: () => 'user123' },
-            deleteOne: jest.fn().mockResolvedValue(true)
-        };
-        Reservation.findById.mockResolvedValue(mockResv);
+  test('200 Success: should delete reservation if user is the owner', async () => {
+    const mockResv = {
+      user: { toString: () => 'user123' },
+      deleteOne: jest.fn().mockResolvedValue(true)
+    };
+    Reservation.findById.mockResolvedValue(mockResv);
 
-        const req = { 
-            params: { id: 'res1' }, 
-            user: { id: 'user123', role: 'user' } 
-        };
-        const res = mockRes();
+    const req = {
+      params: { id: 'res1' },
+      user: { id: 'user123', role: 'user' }
+    };
+    const res = mockRes();
 
-        await reservationsController.permanentlyDeleteReservation(req, res);
+    await reservationsController.permanentlyDeleteReservation(req, res);
 
-        expect(mockResv.deleteOne).toHaveBeenCalled();
-        expect(res.status).toHaveBeenCalledWith(200);
-        expect(res.json).toHaveBeenCalledWith(expect.objectContaining({
-            message: "Reservation permanently deleted"
-        }));
+    expect(mockResv.deleteOne).toHaveBeenCalled();
+    expect(res.status).toHaveBeenCalledWith(200);
+    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({
+      message: "Reservation permanently deleted"
+    }));
+  });
+
+  test('200 Success: should delete if requester is admin (even if not owner)', async () => {
+    const mockResv = {
+      user: { toString: () => 'other_user' },
+      deleteOne: jest.fn().mockResolvedValue(true)
+    };
+    Reservation.findById.mockResolvedValue(mockResv);
+
+    const req = {
+      params: { id: 'res1' },
+      user: { id: 'admin123', role: 'admin' }
+    };
+    const res = mockRes();
+
+    await reservationsController.permanentlyDeleteReservation(req, res);
+
+    expect(mockResv.deleteOne).toHaveBeenCalled();
+    expect(res.status).toHaveBeenCalledWith(200);
+  });
+
+  test('404 Not Found: should return 404 if reservation does not exist', async () => {
+    Reservation.findById.mockResolvedValue(null);
+
+    const req = { params: { id: 'invalid_id' }, user: {} };
+    const res = mockRes();
+
+    await reservationsController.permanentlyDeleteReservation(req, res);
+
+    expect(res.status).toHaveBeenCalledWith(404);
+    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({
+      message: "Reservation not found"
+    }));
+  });
+
+  test('403 Forbidden: should return 403 if user is not owner and not admin', async () => {
+    const mockResv = {
+      user: { toString: () => 'owner_id' }
+    };
+    Reservation.findById.mockResolvedValue(mockResv);
+
+    const req = {
+      params: { id: 'res1' },
+      user: { id: 'attacker_id', role: 'user' }
+    };
+    const res = mockRes();
+
+    await reservationsController.permanentlyDeleteReservation(req, res);
+
+    expect(res.status).toHaveBeenCalledWith(403);
+    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({
+      message: "Not authorized"
+    }));
+  });
+
+  test('500 Error: should trigger handleError on database failure', async () => {
+    Reservation.findById.mockImplementation(() => {
+      throw new Error('DB connection lost');
     });
 
-    test('200 Success: should delete if requester is admin (even if not owner)', async () => {
-        const mockResv = {
-            user: { toString: () => 'other_user' },
-            deleteOne: jest.fn().mockResolvedValue(true)
-        };
-        Reservation.findById.mockResolvedValue(mockResv);
+    const req = { params: { id: 'res1' }, user: {} };
+    const res = mockRes();
 
-        const req = { 
-            params: { id: 'res1' }, 
-            user: { id: 'admin123', role: 'admin' } 
-        };
-        const res = mockRes();
+    await reservationsController.permanentlyDeleteReservation(req, res);
 
-        await reservationsController.permanentlyDeleteReservation(req, res);
-
-        expect(mockResv.deleteOne).toHaveBeenCalled();
-        expect(res.status).toHaveBeenCalledWith(200);
-    });
-
-    test('404 Not Found: should return 404 if reservation does not exist', async () => {
-        Reservation.findById.mockResolvedValue(null);
-
-        const req = { params: { id: 'invalid_id' }, user: {} };
-        const res = mockRes();
-
-        await reservationsController.permanentlyDeleteReservation(req, res);
-
-        expect(res.status).toHaveBeenCalledWith(404);
-        expect(res.json).toHaveBeenCalledWith(expect.objectContaining({
-            message: "Reservation not found"
-        }));
-    });
-
-    test('403 Forbidden: should return 403 if user is not owner and not admin', async () => {
-        const mockResv = {
-            user: { toString: () => 'owner_id' }
-        };
-        Reservation.findById.mockResolvedValue(mockResv);
-
-        const req = { 
-            params: { id: 'res1' }, 
-            user: { id: 'attacker_id', role: 'user' } 
-        };
-        const res = mockRes();
-
-        await reservationsController.permanentlyDeleteReservation(req, res);
-
-        expect(res.status).toHaveBeenCalledWith(403);
-        expect(res.json).toHaveBeenCalledWith(expect.objectContaining({
-            message: "Not authorized"
-        }));
-    });
-
-    test('500 Error: should trigger handleError on database failure', async () => {
-        Reservation.findById.mockImplementation(() => {
-            throw new Error('DB connection lost');
-        });
-
-        const req = { params: { id: 'res1' }, user: {} };
-        const res = mockRes();
-
-        await reservationsController.permanentlyDeleteReservation(req, res);
-
-        expect(res.status).toHaveBeenCalledWith(500); 
-    });
+    expect(res.status).toHaveBeenCalledWith(500);
+  });
 });

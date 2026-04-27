@@ -72,8 +72,10 @@ const swaggerDocs = swaggerJsDoc(swaggerOptions);
 // =====================================================
 const allowedOrigins = [
   "http://localhost:3000",
+  "http://localhost:3001",
   "http://localhost:5000",
-  "https://6-noob7-hack-frontend.vercel.app",
+  "http://web-frontend:3000",
+  "https://6-noob7-hack-frontend.vercel.app", // 🔥 CHANGE THIS
 ];
 
 app.use(
